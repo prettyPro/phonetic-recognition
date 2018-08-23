@@ -18,7 +18,7 @@ n_classes = 21              # 分类类别个数
 dropout_keep_prob = 0.5     # dropout参数,为了减轻过拟合的影响，我们用dropout,它可以随机地关闭一些神经元
 evaluate_every = 10         # 多少step测试一次
 checkpoint_every = 500      # 多少step保存一次模型
-num_checkpoints = 2         # 最多保存多少个模型
+num_checkpoints = 1         # 最多保存多少个模型
 
 # 加载训练用的特征和标签
 train_features = np.load('train_features.npy')
@@ -109,7 +109,7 @@ def batch_iter(data,  batch_size,  num_epochs,  shuffle=True):
 # Initializing the variables
 init = tf.global_variables_initializer()
 # 定义saver
-saver = tf.train.Saver(tf.global_variables())
+saver = tf.train.Saver()
 #
 # with tf.Session() as sess:
 #     sess.run(init)
@@ -163,7 +163,7 @@ def train():
 
             # 保存模型
             if i % checkpoint_every == 0 or i == 6400:
-                path = saver.save(sess, "model", global_step=i)
+                path = saver.save(sess, "model", global_step= i )
                 print("Saved model checkpoint to {}\n".format(path))
 
 def predict():
