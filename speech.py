@@ -2,9 +2,12 @@
 # coding: utf-8
 
 import os
+from tensorflow.python import pywrap_tensorflow
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import numpy as np
+import librosa # pip install librosa
+import get_data
 import time
 import random
 
@@ -28,28 +31,34 @@ train_labels = np.load('train_labels.npy')
 wav_max_len = max([len(feature) for feature in train_features])
 print("max_len:", wav_max_len)
 
-# 填充0
-tr_data = []
-for mfccs in train_features:
-    while len(mfccs) < wav_max_len:
-        mfccs.append([0] * n_inputs)
-    tr_data.append(mfccs)
-tr_data = np.array(tr_data)
-np.random.seed(10)
-shuffle_indices = np.random.permutation(np.arange(len(tr_data)))
-x_shuffled = tr_data[shuffle_indices]
-y_shuffled = train_labels[shuffle_indices]
+#特征预处理
+def get_train_features(features):
+    # 填充0
+    features_data = []
+    for mfccs in features:
+        while len(mfccs) < wav_max_len:
+            mfccs.append([0] * n_inputs)
+        features_data.append(mfccs)
+    features_data = np.array(features_data)
+    return features_data
 
-# 数据集切分为两部分
-dev_sample_index = -1 * int(0.2 * float(len(y_shuffled)))
-train_x,  test_x = x_shuffled[:dev_sample_index],  x_shuffled[dev_sample_index:]
-train_y,  test_y = y_shuffled[:dev_sample_index],  y_shuffled[dev_sample_index:]
+#获取训练集和对应标签
+def get_train_set():
+    tr_data = get_train_features(train_features)
+    np.random.seed(10)
+    shuffle_indices = np.random.permutation(np.arange(len(tr_data)))
+    x_shuffled = tr_data[shuffle_indices]
+    y_shuffled = train_labels[shuffle_indices]
+    # 数据集切分为两部分(0.002表示只取最后一条数据做测试)
+    dev_sample_index = 1 * int(0.002 * float(len(y_shuffled)))
+    train_x, test_x = x_shuffled[dev_sample_index:], x_shuffled[:dev_sample_index]
+    train_y, test_y = y_shuffled[dev_sample_index:], y_shuffled[:dev_sample_index]
+    return train_x, train_y, test_x, test_y
 
-
-#参数：批次，序列号（分帧的数量），每个序列的数据(batch, step, input)
+#参数：批次，序列号（分帧的数量），每个序列的数据(batch, 199, 40)
 x = tf.placeholder("float",  [None,  wav_max_len, n_inputs])
 y = tf.placeholder("float",  [None])
-dropout = tf.placeholder(tf.float32)
+# dropout = tf.placeholder(tf.float32)
 
 # labels转one_hot格式
 one_hot_labels = tf.one_hot(indices=tf.cast(y,  tf.int32),  depth=n_classes)
@@ -72,18 +81,20 @@ cell = tf.contrib.rnn.MultiRNNCell(cell_stack)
 outputs, final_state = tf.nn.dynamic_rnn(cell, x, dtype=tf.float32)
 # final_state[0]:cell state
 # final_state[1]:hidden_state
+# print("outputs:", outputs)
+# print("fina_state:", final_state)
 # 预测值
 prediction = tf.matmul(final_state[1], weights) + biases
 
-# loss
+# 计算交叉熵损失
 # cross_entropy = tf.reduce_mean(tf.square(tf.subtract(prediction,one_hot_labels)))
 cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=one_hot_labels))
 
-# optimizer
+# 优化器
 lr = tf.Variable(lr,  dtype=tf.float32,  trainable=False)
 optimizer = tf.train.AdamOptimizer(learning_rate=lr).minimize(cross_entropy)
 
-# Evaluate model
+# 评估模型
 correct_pred = tf.equal(tf.argmax(prediction, 1), tf.argmax(one_hot_labels, 1))
 accuracy = tf.reduce_mean(tf.cast(correct_pred,  tf.float32))
 
@@ -107,7 +118,7 @@ def batch_iter(data,  batch_size,  num_epochs,  shuffle=True):
 
 
 # Initializing the variables
-init = tf.global_variables_initializer()
+# init = tf.global_variables_initializer()
 # 定义saver
 saver = tf.train.Saver()
 #
@@ -141,6 +152,7 @@ saver = tf.train.Saver()
 #             print("Saved model checkpoint to {}\n".format(path))
 
 def train():
+    train_x, train_y, test_x, test_y = get_train_set()
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         batches = batch_iter(list(zip(train_x, train_y)), batch_size, num_epochs)
@@ -152,26 +164,40 @@ def train():
             # sess.run([optimizer],  feed_dict={x: x_batch,  y: y_batch,  dropout: dropout_keep_prob})
             _, loss_value, pred = sess.run([optimizer, cross_entropy, prediction], feed_dict={x: x_batch, y: y_batch})
 
-            if i % 50 == 0:
+            if i % 100 == 0:
                 # sess.run(tf.assign(lr, lr * (0.90 ** (i // evaluate_every))))
                 # learning_rate = sess.run(lr)
                 tr_acc, _loss = sess.run([accuracy, cross_entropy], feed_dict={x: train_x, y: train_y})
-                # ts_acc = sess.run(accuracy, feed_dict={x: test_x, y: test_y})
                 # tr_acc,  _loss = sess.run([accuracy,  cross_entropy],  feed_dict={x: train_x,  y: train_y,  dropout: 1.0})
-                # ts_acc = sess.run(accuracy,  feed_dict={x: test_x,  y: test_y,  dropout: 1.0})
                 print("Iter {}, loss {:.5f}, tr_acc {:.5f}".format(i, _loss, tr_acc))
-
             # 保存模型
-            if i % checkpoint_every == 0 or i == 6400:
-                path = saver.save(sess, "model", global_step= i )
+            if i % checkpoint_every == 0:
+                path = saver.save(sess, "model/sava.ckpt")
                 print("Saved model checkpoint to {}\n".format(path))
 
 def predict():
+    # train_x, train_y, test_x, test_y = get_train_set()
+    wav_files = ['audio\\output\\you001.wav']
+    input = get_data.extract_features(wav_files)
+    input_x = get_train_features(input)
     with tf.Session() as sess:
-        saver.restore(sess, "model")
-        output = sess.run(accuracy, feed_dict={x: test_x, y: test_y})
-        print(output)
+        saver.restore(sess, "model/sava.ckpt")
+        # ts_acc = sess.run(accuracy, feed_dict={x: test_x, y: test_y})
+        # print("ts_acc", ts_acc)
+        outputs_x = sess.run(prediction, feed_dict={x: input_x})
+        outputs_label = np.argmax(outputs_x, 1)
+        print(outputs_label)
+
+def check():
+    # Read data from checkpoint file
+    reader = pywrap_tensorflow.NewCheckpointReader("model/sava.ckpt")
+    var_to_shape_map = reader.get_variable_to_shape_map()
+    # Print tensor name and values
+    for key in var_to_shape_map:
+        print("tensor_name: ", key)
+        print(reader.get_tensor(key))
 
 if __name__ == "__main__":
-    train()
-    # predict()
+    # train()
+    predict()
+    # check()

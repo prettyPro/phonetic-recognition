@@ -1,0 +1,2 @@
+model_checkpoint_path: "sava.ckpt"
+all_model_checkpoint_paths: "sava.ckpt"
